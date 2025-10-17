@@ -4,6 +4,7 @@
 (function () {
   const MARK_ATTR = 'data-reclaim-duration-appended';
   const MARK_VERSION = '1';
+  const COPY_BTN_ATTR = 'data-reclaim-copy-title';
 
   // Regex to match time ranges like "1:15 - 2:15pm", "9:35am - 1:05pm", or "12:00pm - 1:30pm"
   // Supports optional minutes and optional am/pm on BOTH times.
@@ -44,6 +45,52 @@
     // Always two decimals as per examples (e.g., 1.25h, 0.75h)
     const dec = (minutes / 60);
     return dec.toFixed(2);
+  }
+
+  // Parse a raw title string to remove client/project prefixes per examples
+  function parseTitleForCopy(raw) {
+    if (raw == null) return '';
+    let s = String(raw).trim();
+    if (!s) return '';
+
+    const original = s;
+
+    // 1) Remove one or more leading parenthetical tags e.g., (HOP) (RK)
+    s = s.replace(/^(?:\s*\([^)]{1,30}\)\s*)+/g, '').trim();
+
+    // 2) If there's a middle dot separator (client · title), drop the left side
+    const dotIdx = s.indexOf('·');
+    if (dotIdx > -1) {
+      const left = s.slice(0, dotIdx).trim();
+      const right = s.slice(dotIdx + 1).trim();
+      // Heuristic: left looks like a short client/project label
+      if (left.length > 0 && left.length <= 30 && left.split(/\s+/).length <= 4) {
+        s = right;
+      }
+    }
+
+    // 3) Remove prefix before hyphen when it looks like a client/project label
+    //    Handles cases like "GM - Title" and "Gleam - Title"
+    const hyphenMatch = s.match(/^\s*(.+?)\s*[\-–—]\s+(.+)$/);
+    if (hyphenMatch) {
+      const left = hyphenMatch[1].trim();
+      const right = hyphenMatch[2].trim();
+
+      const leftWords = left.split(/\s+/).filter(Boolean);
+      const rightWords = right.split(/\s+/).filter(Boolean);
+      const leftLooksLikeCode = /^[A-Z0-9]{1,5}$/.test(left);
+      const isLeftShort = left.length <= 20 && leftWords.length <= 3;
+      const leftTitleCased = leftWords.length > 0 && leftWords.every(w => /^[A-Z][a-z0-9'()&.-]*$/.test(w));
+      const rightHasIndicators = /[,()]/.test(right) || rightWords.length >= 4;
+      const rightStartsWithVerb = /\b(Add|Fix|Deploy|Update|Upgrade|Implement|Migrate|Refactor|QA|Design|Build|Setup|Set\s*up|Sync|Investigate|Research|Write|Draft|Review|Plan|Meeting|Kickoff|Support|Debug|Copy|Create|Optimize|Improve|Bug|Test)\b/i.test(right);
+
+      if (leftLooksLikeCode || (isLeftShort && leftTitleCased && (rightHasIndicators || rightStartsWithVerb))) {
+        s = right;
+      }
+    }
+
+    s = s.trim();
+    return s || original;
   }
 
   function parseAndFormatDuration(text) {
@@ -90,6 +137,26 @@
       .reclaim-duration{cursor:pointer;text-decoration:none;}
       .reclaim-duration .reclaim-duration-inner{ text-decoration:none; }
       .reclaim-duration:hover .reclaim-duration-inner{ text-decoration:underline; }
+    `;
+    (document.head || document.documentElement).appendChild(style);
+  }
+
+  function ensureCopyTitleStyle() {
+    if (document.getElementById('reclaim-copy-title-style')) return;
+    const style = document.createElement('style');
+    style.id = 'reclaim-copy-title-style';
+    style.textContent = `
+      .reclaim-copy-title-btn{ 
+        display:inline-flex; align-items:center; justify-content:center; 
+        width:18px; height:18px; min-width:22px; min-height:22px; margin-left:8px; padding:0; border-radius:4px; border:1px solid transparent; 
+        cursor:pointer; background:transparent; color:inherit; line-height:1; 
+        order:-1; flex:0 0 22px;
+      }
+      .reclaim-copy-title-btn:hover{ background:rgba(0,0,0,0.06); }
+      .reclaim-copy-title-btn:active{ transform: translateY(0.5px); }
+      .reclaim-copy-title-btn svg{ width:18px; height:18px; fill: currentColor; }
+      .reclaim-copy-title-badge{ font-size:12px; margin-left:6px; opacity:0.75; }
+      .reclaim-copy-title-viewer{ order:-2; flex: 1 1 auto; min-width:0; }
     `;
     (document.head || document.documentElement).appendChild(style);
   }
@@ -202,6 +269,200 @@
     }
   }
 
+  // ---------- Title copy button injection ----------
+  function buildCopyButton(getText) {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'reclaim-copy-title-btn';
+    btn.setAttribute('aria-label', 'Copy title to clipboard');
+    btn.title = 'Copy title to clipboard';
+    btn.innerHTML = `
+      <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+        <path d="M16 1H4c-1.1 0-2 .9-2 2v12h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z"></path>
+      </svg>
+    `;
+
+    const copy = (e) => {
+      e.stopPropagation();
+      const raw = (typeof getText === 'function') ? (getText() || '') : '';
+      const text = parseTitleForCopy(raw);
+      if (!text) return;
+      try {
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          navigator.clipboard.writeText(text).catch(() => {});
+        } else {
+          const ta = document.createElement('textarea');
+          ta.value = text;
+          ta.style.position = 'fixed';
+          ta.style.opacity = '0';
+          document.body.appendChild(ta);
+          ta.focus();
+          ta.select();
+          try { document.execCommand('copy'); } catch (_) {}
+          document.body.removeChild(ta);
+        }
+        // brief visual feedback via title change
+        const prev = btn.title;
+        btn.title = 'Copied!';
+        setTimeout(() => { btn.title = prev; }, 1200);
+      } catch (_) {}
+    };
+    btn.addEventListener('click', copy);
+    btn.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ' ') { copy(e); e.preventDefault(); }
+    });
+    return btn;
+  }
+
+  function getTitleTextFromContainer(container) {
+    if (!container) return '';
+    // If in edit mode, prefer the input's value
+    const input = container.querySelector('input[type="text"], textarea');
+    if (input && typeof input.value === 'string' && input.value.trim().length > 0) {
+      return input.value.trim();
+    }
+    // Primary: span with class containing 'EmojiTextField_viewer__'
+    const viewer = container.querySelector('[class*="EmojiTextField_viewer__"]');
+    if (viewer && viewer.textContent) return viewer.textContent.trim();
+    // Fallback: any element with role heading or first text node
+    const heading = container.querySelector('[role="heading"], h1, h2, h3');
+    if (heading && heading.textContent) return heading.textContent.trim();
+    return container.textContent ? container.textContent.trim() : '';
+  }
+
+  // ----- Title wrapper processing and observers -----
+  const TITLE_WRAPPER_SELECTOR = [
+    '[class*="GenericEventDetails_inner__header__titles"] [class*="EmojiTextField_root"]',
+    // Simple title variant: plain title div inside the titles container
+    '[class*="GenericEventDetails_inner__header__titles"] [class*="GenericEventDetails_inner__header__titles__title__"]',
+    '[class*="GenericEventDetails_inner__header__titles"] > [class*="GenericEventDetails_inner__header__titles__title__"]'
+  ].join(',');
+  const wrapperObserverMap = new WeakMap();
+  const wrapperDebounceMap = new WeakMap();
+
+  function processTitleWrapper(parent) {
+    if (!parent) return;
+    // Prefer an active TextField container (edit mode); otherwise fall back to viewer span
+    let titleEl = parent.querySelector && parent.querySelector('[class*="MuiTextField-root"]');
+    if (!titleEl && parent.querySelector) titleEl = parent.querySelector('[class*="EmojiTextField_viewer__"]');
+    // Simple title case: no child title element; use parent itself as title element
+    if (!titleEl) titleEl = parent;
+
+    // Ensure ordering/styles on the title element
+    try {
+      titleEl.classList.add('reclaim-copy-title-viewer');
+      titleEl.style.order = '-2';
+      titleEl.style.flex = '1 1 auto';
+      titleEl.style.minWidth = '0';
+    } catch(_) {}
+
+    // Decide placement: if titleEl is the same as parent (simple title), append inside; otherwise, place after titleEl
+    if (titleEl === parent) {
+      const last = parent.lastElementChild;
+      if (last && last.classList && last.classList.contains('reclaim-copy-title-btn')) {
+        // Remove any duplicates elsewhere inside parent
+        const extras = Array.from(parent.querySelectorAll('.reclaim-copy-title-btn'));
+        extras.forEach((b) => { if (b !== last) b.remove(); });
+      } else {
+        parent.querySelectorAll('.reclaim-copy-title-btn').forEach((b) => b.remove());
+        const btn = buildCopyButton(() => getTitleTextFromContainer(parent));
+        // Ensure the button orders after the anonymous text flex item
+        try { btn.style.order = '1'; } catch(_) {}
+        parent.insertAdjacentElement('beforeend', btn);
+      }
+    } else {
+      // Complex (emoji/viewer or textfield) case
+      const next = titleEl.nextElementSibling;
+      if (next && next.classList && next.classList.contains('reclaim-copy-title-btn')) {
+        const extras = parent.querySelectorAll('.reclaim-copy-title-btn');
+        for (const btn of extras) { if (btn !== next) btn.remove(); }
+      } else {
+        parent.querySelectorAll('.reclaim-copy-title-btn').forEach((b) => b.remove());
+        const btn = buildCopyButton(() => getTitleTextFromContainer(parent));
+        titleEl.insertAdjacentElement('afterend', btn);
+      }
+    }
+
+    // Enforce wrapper flex layout and hide emoji picker
+    try {
+      // If using simple title (titleEl === parent), flex that element; otherwise flex the parent wrapper
+      const flexTarget = titleEl === parent ? parent : parent;
+      flexTarget.style.display = 'flex';
+      flexTarget.style.flexDirection = 'row';
+      flexTarget.style.alignItems = 'center';
+      flexTarget.style.justifyContent = 'space-between';
+      const emoji = parent.querySelector('[class*="EmojiTextField_emoji"]');
+      if (emoji && emoji.style) emoji.style.display = 'none';
+    } catch(_) {}
+  }
+
+  function isSelfMutation(mutation) {
+    // Ignore mutations fully caused by our elements/classes
+    if (mutation.type === 'childList') {
+      // If all added nodes are our button, ignore
+      if (mutation.addedNodes && mutation.addedNodes.length > 0) {
+        let allOurs = true;
+        mutation.addedNodes.forEach((n) => {
+          if (!(n.nodeType === 1 && n.classList && n.classList.contains('reclaim-copy-title-btn'))) {
+            allOurs = false;
+          }
+        });
+        if (allOurs) return true;
+      }
+      // If all removed nodes are our button, ignore
+      if (mutation.removedNodes && mutation.removedNodes.length > 0) {
+        let allOurs = true;
+        mutation.removedNodes.forEach((n) => {
+          if (!(n.nodeType === 1 && n.classList && n.classList.contains('reclaim-copy-title-btn'))) {
+            allOurs = false;
+          }
+        });
+        if (allOurs) return true;
+      }
+    } else if (mutation.type === 'attributes') {
+      const t = mutation.target;
+      if (t && t.classList) {
+        if (t.classList.contains('reclaim-copy-title-viewer') || t.classList.contains('reclaim-copy-title-btn')) {
+          return true;
+        }
+      }
+    }
+    return false;
+  }
+
+  function ensureObserverForWrapper(parent) {
+    if (!parent || wrapperObserverMap.has(parent)) return;
+    const obs = new MutationObserver((mutations) => {
+      // If all mutations are ours, skip
+      const hasRelevant = mutations.some((m) => !isSelfMutation(m));
+      if (!hasRelevant) return;
+      // Debounce per-wrapper to avoid thrashing on rapid React renders
+      const existing = wrapperDebounceMap.get(parent);
+      if (existing) clearTimeout(existing);
+      const timer = setTimeout(() => {
+        try { processTitleWrapper(parent); } catch(_) {}
+      }, 50);
+      wrapperDebounceMap.set(parent, timer);
+    });
+    obs.observe(parent, {
+      childList: true,
+      subtree: true,
+      attributes: true,
+      attributeFilter: ['class'] // ignore style changes we apply
+    });
+    wrapperObserverMap.set(parent, obs);
+  }
+
+  function ensureTitleCopyButtons() {
+    ensureCopyTitleStyle();
+    // Find title wrappers and handle both view and edit modes
+    const wrappers = document.querySelectorAll(TITLE_WRAPPER_SELECTOR);
+    for (const parent of wrappers) {
+      processTitleWrapper(parent);
+      ensureObserverForWrapper(parent);
+    }
+  }
+
   // Throttled processing of candidate <p> elements collected from mutations
   const candidatePs = new Set();
   let throttleTimer = null;
@@ -227,9 +488,14 @@
   }
 
   function runAnnotationNow() {
-    if (candidatePs.size === 0) return;
-    for (const el of candidatePs) annotateElement(el);
-    candidatePs.clear();
+    // Always ensure the title copy button and ordering on each tick
+    try { ensureTitleCopyButtons(); } catch (_) {}
+
+    // Process candidate <p> nodes if any
+    if (candidatePs.size > 0) {
+      for (const el of candidatePs) annotateElement(el);
+      candidatePs.clear();
+    }
   }
 
   function scheduleAnnotate() {
@@ -268,10 +534,13 @@
     document.addEventListener('DOMContentLoaded', () => {
       document.querySelectorAll('p').forEach((p) => candidatePs.add(p));
       scheduleAnnotate();
+      // Initial title scan
+      try { ensureTitleCopyButtons(); } catch (_) {}
     }, { once: true });
   } else {
     document.querySelectorAll('p').forEach((p) => candidatePs.add(p));
     scheduleAnnotate();
+    try { ensureTitleCopyButtons(); } catch (_) {}
   }
   setupObserver();
 })();
