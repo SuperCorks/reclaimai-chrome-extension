@@ -150,13 +150,18 @@
         display:inline-flex; align-items:center; justify-content:center; 
         width:18px; height:18px; min-width:22px; min-height:22px; margin-left:8px; padding:0; border-radius:4px; border:1px solid transparent; 
         cursor:pointer; background:transparent; color:inherit; line-height:1; 
-        order:-1; flex:0 0 22px;
+        /* Do not rely on flex ordering to avoid breaking host layout */
       }
+      /* Anchor for absolute positioning inside the title element */
+      .reclaim-copy-title-anchor{ position:relative; padding-right:26px; }
+      .reclaim-copy-title-anchor > .reclaim-copy-title-btn{ position:absolute; right:0; top:50%; transform:translateY(-50%); margin-left:0; }
       .reclaim-copy-title-btn:hover{ background:rgba(0,0,0,0.06); }
       .reclaim-copy-title-btn:active{ transform: translateY(0.5px); }
       .reclaim-copy-title-btn svg{ width:18px; height:18px; fill: currentColor; }
       .reclaim-copy-title-badge{ font-size:12px; margin-left:6px; opacity:0.75; }
-      .reclaim-copy-title-viewer{ order:-2; flex: 1 1 auto; min-width:0; }
+      /* Minimal viewer tweaks only; avoid overriding display or order so we don't
+         disrupt the app's original flex/stacking (e.g., "Viewing" line above title). */
+      .reclaim-copy-title-viewer{ min-width:0; }
     `;
     (document.head || document.documentElement).appendChild(style);
   }
@@ -348,49 +353,28 @@
     // Simple title case: no child title element; use parent itself as title element
     if (!titleEl) titleEl = parent;
 
-    // Ensure ordering/styles on the title element
-    try {
-      titleEl.classList.add('reclaim-copy-title-viewer');
-      titleEl.style.order = '-2';
-      titleEl.style.flex = '1 1 auto';
-      titleEl.style.minWidth = '0';
-    } catch(_) {}
+    // Tag the title element for our minimal CSS (do not change layout/display)
+    try { titleEl.classList.add('reclaim-copy-title-viewer'); } catch(_) {}
 
-    // Decide placement: if titleEl is the same as parent (simple title), append inside; otherwise, place after titleEl
-    if (titleEl === parent) {
-      const last = parent.lastElementChild;
-      if (last && last.classList && last.classList.contains('reclaim-copy-title-btn')) {
-        // Remove any duplicates elsewhere inside parent
-        const extras = Array.from(parent.querySelectorAll('.reclaim-copy-title-btn'));
-        extras.forEach((b) => { if (b !== last) b.remove(); });
-      } else {
-        parent.querySelectorAll('.reclaim-copy-title-btn').forEach((b) => b.remove());
-        const btn = buildCopyButton(() => getTitleTextFromContainer(parent));
-        // Ensure the button orders after the anonymous text flex item
-        try { btn.style.order = '1'; } catch(_) {}
-        parent.insertAdjacentElement('beforeend', btn);
-      }
+    // Choose an anchor inside which the button will be absolutely positioned
+    let anchor = null;
+    try { anchor = parent.querySelector('[class*="EmojiTextField_viewer__"]') || titleEl; } catch(_) { anchor = titleEl; }
+    try { anchor.classList.add('reclaim-copy-title-anchor'); } catch(_) {}
+
+    // Remove any existing buttons under the same parent except the one inside anchor
+    const existingInAnchor = anchor.querySelector('.reclaim-copy-title-btn');
+    if (existingInAnchor) {
+      // Clean up stray duplicates elsewhere under parent
+      const extras = parent.querySelectorAll('.reclaim-copy-title-btn');
+      for (const b of extras) { if (b !== existingInAnchor) b.remove(); }
     } else {
-      // Complex (emoji/viewer or textfield) case
-      const next = titleEl.nextElementSibling;
-      if (next && next.classList && next.classList.contains('reclaim-copy-title-btn')) {
-        const extras = parent.querySelectorAll('.reclaim-copy-title-btn');
-        for (const btn of extras) { if (btn !== next) btn.remove(); }
-      } else {
-        parent.querySelectorAll('.reclaim-copy-title-btn').forEach((b) => b.remove());
-        const btn = buildCopyButton(() => getTitleTextFromContainer(parent));
-        titleEl.insertAdjacentElement('afterend', btn);
-      }
+      const btn = buildCopyButton(() => getTitleTextFromContainer(parent));
+      anchor.appendChild(btn);
+      // Ensure anchor remains the same height; no further layout changes
     }
 
-    // Enforce wrapper flex layout and hide emoji picker
+    // Hide emoji button (optional UX tweak) without altering layout
     try {
-      // If using simple title (titleEl === parent), flex that element; otherwise flex the parent wrapper
-      const flexTarget = titleEl === parent ? parent : parent;
-      flexTarget.style.display = 'flex';
-      flexTarget.style.flexDirection = 'row';
-      flexTarget.style.alignItems = 'center';
-      flexTarget.style.justifyContent = 'space-between';
       const emoji = parent.querySelector('[class*="EmojiTextField_emoji"]');
       if (emoji && emoji.style) emoji.style.display = 'none';
     } catch(_) {}
