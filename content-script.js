@@ -1,10 +1,24 @@
-// Content script for Reclaim Planner Duration Helper
-// Finds time ranges like "1:15 - 2:15pm" and appends the duration e.g., " (1h00m)"
+// Reclaim Planner helper content script
+// - Appends human-friendly durations to time ranges in <p> text (e.g., "1:15 - 2:15pm (1h00m)").
+// - Adds a subtle, accessible copy button to the event title that copies a cleaned-up title.
+// - Detects the visible Attendees list for the current event and updates the Google Meet Join
+//   button's URL to include ?authuser=<matching_email> using a prioritized list of your addresses.
+//   This targets only the "Online meeting" Join link within the same details panel and updates
+//   automatically as the page re-renders.
 
 (function () {
   const MARK_ATTR = 'data-reclaim-duration-appended';
   const MARK_VERSION = '1';
-  const COPY_BTN_ATTR = 'data-reclaim-copy-title';
+  const AUTHUSER_ATTR = 'data-reclaim-authuser-applied';
+
+  // Ordered priority list of emails to use for Meet authUser param
+  const KNOWN_EMAILS_PRIORITY = [
+    'simon@hoptech.ca',
+    'simon@redkrypton.com',
+    'simoncorcos.ing@gmail.com',
+    'simon@corcos.ca',
+    'simon.corcos@toptal.com',
+  ];
 
   // Regex to match time ranges like "1:15 - 2:15pm", "9:35am - 1:05pm", or "12:00pm - 1:30pm"
   // Supports optional minutes and optional am/pm on BOTH times.
@@ -447,6 +461,177 @@
     }
   }
 
+  // ---------- Google Meet authuser handling ----------
+  function getDetailValueContainer(labelText, scopeRoot) {
+    // Find a detail row where the left label equals labelText and return the right value container, scoped to a root
+    const root = scopeRoot || document;
+    try {
+      const labelNodes = Array.from(root.querySelectorAll('div, span, p'))
+        .filter(el => el && el.childElementCount === 0 && el.textContent && el.textContent.trim() === labelText);
+      for (const node of labelNodes) {
+        const parent = node.parentElement;
+        if (!parent) continue;
+        const value = parent.nextElementSibling;
+        if (value && value.textContent != null) return value;
+      }
+    } catch (_) {}
+    return null;
+  }
+
+  function collectAttendeeEmails(scopeRoot) {
+    const valueContainer = getDetailValueContainer('Attendees', scopeRoot);
+    const emails = new Set();
+    if (!valueContainer) return emails;
+    const EMAIL_RE = /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g;
+    // Walk text from descendants
+    try {
+      const walker = document.createTreeWalker(valueContainer, NodeFilter.SHOW_TEXT, null);
+      let n;
+      while ((n = walker.nextNode())) {
+        const t = n.nodeValue || '';
+        let m;
+        while ((m = EMAIL_RE.exec(t)) !== null) {
+          emails.add(m[0].toLowerCase());
+        }
+      }
+    } catch (_) {}
+    return emails;
+  }
+
+  function collectEmailsFromContainer(containerEl) {
+    const emails = new Set();
+    if (!containerEl) return emails;
+    const EMAIL_RE = /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g;
+    try {
+      const walker = document.createTreeWalker(containerEl, NodeFilter.SHOW_TEXT, null);
+      let n;
+      while ((n = walker.nextNode())) {
+        const t = n.nodeValue || '';
+        let m;
+        while ((m = EMAIL_RE.exec(t)) !== null) {
+          emails.add(m[0].toLowerCase());
+        }
+      }
+    } catch (_) {}
+    return emails;
+  }
+
+  function pickAuthEmail(attendeeEmails) {
+    for (const e of KNOWN_EMAILS_PRIORITY) {
+      if (attendeeEmails.has(e.toLowerCase())) return e;
+    }
+    return null;
+  }
+
+  function findJoinMeetAnchors() {
+    const anchors = Array.from(document.querySelectorAll('a[href*="meet.google.com"]'));
+    if (anchors.length === 0) return [];
+
+    // Prefer anchors in the "Online meeting" row or with Join button styling/text
+    const onlineValue = getDetailValueContainer('Online meeting');
+    const inOnline = new Set();
+    if (onlineValue) {
+      for (const a of onlineValue.querySelectorAll('a[href*="meet.google.com"]')) inOnline.add(a);
+    }
+
+    const result = [];
+    for (const a of anchors) {
+      const text = (a.textContent || '').trim().toLowerCase();
+      const cls = a.className || '';
+      const looksJoin = text.includes('join') || /JoinMeetingButton_/i.test(cls);
+      if (inOnline.has(a) || looksJoin) result.push(a);
+    }
+    return result;
+  }
+
+  function getScopeRootForAnchor(anchor) {
+    // Ascend to a container that contains both the Online meeting and Attendees rows
+    let el = anchor;
+    for (let depth = 0; el && depth < 12; depth++) {
+      const root = el;
+      try {
+        const hasOnline = !!getDetailValueContainer('Online meeting', root);
+        const hasAttendees = !!getDetailValueContainer('Attendees', root);
+        if (hasOnline && hasAttendees) return root;
+      } catch (_) {}
+      el = el.parentElement;
+    }
+    // Fallback to document
+    return document;
+  }
+
+  function findAttendeesContainerNear(anchor) {
+    // Prefer an explicit Attendees subsection container near the anchor
+    let el = anchor;
+    for (let depth = 0; el && depth < 12; depth++) {
+      try {
+        const c = el.querySelector('[class*="AttendeesDomainDetailContent_root__"], [class*="AttendeesDomainDetailContent_content__"]');
+        if (c) return c;
+      } catch (_) {}
+      el = el.parentElement;
+    }
+    // fallback via label-based lookup within the broader scope root
+    const scope = getScopeRootForAnchor(anchor);
+    return getDetailValueContainer('Attendees', scope) || null;
+  }
+
+  function applyAuthUserToHref(href, email) {
+    try {
+      const url = new URL(href, location.href);
+      // Set only the lowercase authuser=<email> param (preferred by Meet) and remove any other
+      // variant (e.g., mixed-case authUser) while preserving existing query params.
+      url.searchParams.delete('authuser');
+      url.searchParams.set('authuser', email);
+      return url.toString();
+    } catch (_) {
+      return href;
+    }
+  }
+
+  function ensureMeetAuthUserOnJoin() {
+    try {
+      const anchors = findJoinMeetAnchors();
+      for (const a of anchors) {
+        // Compute chosen email using the closest Attendees subsection
+        const attendeesContainer = findAttendeesContainerNear(a);
+        let attendeeEmails = collectEmailsFromContainer(attendeesContainer);
+        if (attendeeEmails.size === 0) {
+          const scopeRoot = getScopeRootForAnchor(a);
+          attendeeEmails = collectAttendeeEmails(scopeRoot);
+        }
+        const chosen = pickAuthEmail(attendeeEmails);
+        if (!chosen) {
+          // If previously applied, remove param to avoid stale account selection
+          const before = a.href;
+          try {
+            const url = new URL(before, location.href);
+            if (url.searchParams.has('authuser') || url.searchParams.has('authuser')) {
+              url.searchParams.delete('authuser');
+              url.searchParams.delete('authuser');
+              a.href = url.toString();
+              a.removeAttribute(AUTHUSER_ATTR);
+            }
+          } catch (_) {}
+          continue;
+        }
+        const currentApplied = a.getAttribute(AUTHUSER_ATTR);
+        if (currentApplied === chosen && a.href && /[?&]authuser=/i.test(a.href)) {
+          continue; // already correct
+        }
+        const before = a.href;
+        const after = applyAuthUserToHref(before, chosen);
+        if (after !== before) {
+          a.href = after;
+        } else if (!/[?&]authuser=/i.test(before)) {
+          // Fallback: append query manually if URL parsing failed
+          const sep = before.includes('?') ? '&' : '?';
+          a.href = `${before}${sep}authuser=${encodeURIComponent(chosen)}`;
+        }
+        a.setAttribute(AUTHUSER_ATTR, chosen);
+      }
+    } catch (_) {}
+  }
+
   // Throttled processing of candidate <p> elements collected from mutations
   const candidatePs = new Set();
   let throttleTimer = null;
@@ -474,6 +659,8 @@
   function runAnnotationNow() {
     // Always ensure the title copy button and ordering on each tick
     try { ensureTitleCopyButtons(); } catch (_) {}
+  // Ensure Meet authuser is applied to Join links when relevant
+    try { ensureMeetAuthUserOnJoin(); } catch (_) {}
 
     // Process candidate <p> nodes if any
     if (candidatePs.size > 0) {
@@ -520,11 +707,14 @@
       scheduleAnnotate();
       // Initial title scan
       try { ensureTitleCopyButtons(); } catch (_) {}
+      // Initial Meet authuser pass
+      try { ensureMeetAuthUserOnJoin(); } catch (_) {}
     }, { once: true });
   } else {
     document.querySelectorAll('p').forEach((p) => candidatePs.add(p));
     scheduleAnnotate();
     try { ensureTitleCopyButtons(); } catch (_) {}
+    try { ensureMeetAuthUserOnJoin(); } catch (_) {}
   }
   setupObserver();
 })();
