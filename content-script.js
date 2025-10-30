@@ -97,8 +97,10 @@
       const leftTitleCased = leftWords.length > 0 && leftWords.every(w => /^[A-Z][a-z0-9'()&.-]*$/.test(w));
       const rightHasIndicators = /[,()]/.test(right) || rightWords.length >= 4;
       const rightStartsWithVerb = /\b(Add|Fix|Deploy|Update|Upgrade|Implement|Migrate|Refactor|QA|Design|Build|Setup|Set\s*up|Sync|Investigate|Research|Write|Draft|Review|Plan|Meeting|Kickoff|Support|Debug|Copy|Create|Optimize|Improve|Bug|Test)\b/i.test(right);
+      // Also check if right side looks like a person's name or task description (has at least 2 words)
+      const rightLooksSubstantive = rightWords.length >= 2;
 
-      if (leftLooksLikeCode || (isLeftShort && leftTitleCased && (rightHasIndicators || rightStartsWithVerb))) {
+      if (leftLooksLikeCode || (isLeftShort && leftTitleCased && (rightHasIndicators || rightStartsWithVerb || rightLooksSubstantive))) {
         s = right;
       }
     }
@@ -170,7 +172,7 @@
       .reclaim-copy-title-anchor{ position:relative; padding-right:26px; }
       .reclaim-copy-title-anchor > .reclaim-copy-title-btn{ position:absolute; right:0; top:50%; transform:translateY(-50%); margin-left:0; }
       .reclaim-copy-title-btn:hover{ background:rgba(0,0,0,0.06); }
-      .reclaim-copy-title-btn:active{ transform: translateY(0.5px); }
+      .reclaim-copy-title-btn:active{ transform: translateY(calc(-50% + 0.5px)); }
       .reclaim-copy-title-btn svg{ width:18px; height:18px; fill: currentColor; }
       .reclaim-copy-title-badge{ font-size:12px; margin-left:6px; opacity:0.75; }
       /* Minimal viewer tweaks only; avoid overriding display or order so we don't
