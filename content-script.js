@@ -637,7 +637,7 @@
   // Throttled processing of candidate <p> elements collected from mutations
   const candidatePs = new Set();
   let throttleTimer = null;
-  const THROTTLE_MS = 1000; // 1 second
+  const THROTTLE_MS = 50; // 150 milliseconds
 
   function queueElementForAnnotation(node) {
     if (!node) return;
@@ -658,11 +658,123 @@
     }
   }
 
+  function hideEmptyTaskMessage() {
+    const ps = document.querySelectorAll('p');
+    for (const p of ps) {
+      if (p.textContent && p.textContent.trim() === "You don't have any upcoming calendar events for this Task.") {
+        let el = p.parentElement;
+        while (el && el !== document.body) {
+          if (el.className && typeof el.className === 'string' && el.className.includes('GenericInfoMessage_root__')) {
+            el.style.display = 'none';
+            break;
+          }
+          el = el.parentElement;
+        }
+      }
+    }
+  }
+
+  let areDetailsExpanded = false;
+
+  function createAsanaButton(url) {
+    const a = document.createElement('a');
+    a.className = 'reclaim-asana-btn';
+    a.href = url;
+    a.target = '_blank';
+    a.title = 'Open in Asana';
+    a.style.cssText = 'display:inline-flex; align-items:center; gap:4px; color:#444; text-decoration:none; font-size:0.75rem; background:#f5f5f5; padding:2px 8px; border-radius:4px; border:1px solid #ddd; margin-left: 8px;';
+    // Simple external link icon
+    a.innerHTML = `
+      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path>
+        <polyline points="15 3 21 3 21 9"></polyline>
+        <line x1="10" y1="14" x2="21" y2="3"></line>
+      </svg>
+      Asana
+    `;
+    return a;
+  }
+
+  function manageDetailRows() {
+    const detailRows = document.querySelectorAll('[class*="GenericEventDetails_inner__content__domainDetails__details__detail__"]');
+    const targets = [];
+    let parent = null;
+    let referenceNode = null;
+    let asanaLink = null;
+
+    for (const row of detailRows) {
+      if (!parent) parent = row.parentElement;
+      const labelDiv = row.firstElementChild;
+      if (labelDiv && labelDiv.textContent) {
+        const text = labelDiv.textContent.trim();
+        if (text === 'Visibility' || text === 'Calendars' || text === 'Notes') {
+          targets.push(row);
+          if (!referenceNode) referenceNode = row;
+
+          if (text === 'Notes') {
+            // Try to find an Asana link in the notes
+            const links = row.querySelectorAll('a[href*="asana.com"]');
+            if (links.length > 0) {
+              asanaLink = links[0].href;
+            }
+          }
+        }
+      }
+    }
+
+    if (targets.length === 0 || !parent) return;
+
+    // Check if container already exists
+    let container = parent.querySelector('.reclaim-details-controls');
+    if (container) {
+      // If we found an Asana link but haven't added the button yet, add it
+      if (asanaLink && !container.querySelector('.reclaim-asana-btn')) {
+        container.appendChild(createAsanaButton(asanaLink));
+      }
+      return;
+    }
+
+    container = document.createElement('div');
+    container.className = 'reclaim-details-controls';
+    container.style.cssText = 'display:flex; align-items:center; margin-bottom:4px;';
+
+    const btn = document.createElement('button');
+    btn.className = 'reclaim-details-toggle-btn';
+    btn.style.cssText = 'background:none; border:none; padding:0; color:#888; cursor:pointer; font-size:0.75rem; font-family:inherit; text-decoration:underline;';
+    
+    const updateState = () => {
+      targets.forEach(row => row.style.display = areDetailsExpanded ? '' : 'none');
+      btn.textContent = areDetailsExpanded ? 'Hide details' : 'Show details';
+    };
+
+    btn.onclick = (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      areDetailsExpanded = !areDetailsExpanded;
+      updateState();
+    };
+
+    updateState();
+    container.appendChild(btn);
+
+    if (asanaLink) {
+      container.appendChild(createAsanaButton(asanaLink));
+    }
+
+    parent.insertBefore(container, referenceNode);
+  }
+
   function runAnnotationNow() {
     // Always ensure the title copy button and ordering on each tick
     try { ensureTitleCopyButtons(); } catch (_) {}
-  // Ensure Meet authuser is applied to Join links when relevant
+    // Ensure Meet authuser is applied to Join links when relevant
     try { ensureMeetAuthUserOnJoin(); } catch (_) {}
+    // Hide empty task message
+    try { hideEmptyTaskMessage(); } catch (_) {}
+    // Manage detail rows visibility
+    try { manageDetailRows(); } catch (_) {}
+    // Inject custom styles
+    try { injectCustomStyles(); } catch (_) {}
 
     // Process candidate <p> nodes if any
     if (candidatePs.size > 0) {
