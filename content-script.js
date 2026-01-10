@@ -358,6 +358,12 @@
     '[class*="GenericEventDetails_inner__header__titles"] [class*="GenericEventDetails_inner__header__titles__title__"]',
     '[class*="GenericEventDetails_inner__header__titles"] > [class*="GenericEventDetails_inner__header__titles__title__"]'
   ].join(',');
+
+  // Selector for popup/popover card titles (CalendarCardPopover)
+  const POPUP_TITLE_SELECTOR = [
+    '[class*="CalendarCardPopover"] [class*="CalendarCardHeader_children__"]',
+    '[class*="CalendarCard_root__"] [class*="CalendarCardHeader_children__"]'
+  ].join(',');
   const wrapperObserverMap = new WeakMap();
   const wrapperDebounceMap = new WeakMap();
 
@@ -453,13 +459,40 @@
     wrapperObserverMap.set(parent, obs);
   }
 
+  // Process popup/popover card titles (CalendarCardPopover)
+  function processPopupTitle(container) {
+    if (!container) return;
+    // The title is in an h5 element inside the container
+    const titleEl = container.querySelector('h5, [class*="MuiTypography-h5"]');
+    if (!titleEl) return;
+    
+    // Check if we already added a button
+    if (container.querySelector('.reclaim-copy-title-btn')) return;
+    
+    // Add anchor class for positioning
+    try { container.classList.add('reclaim-copy-title-anchor'); } catch(_) {}
+    
+    // Build and insert the copy button
+    const btn = buildCopyButton(() => {
+      return titleEl.textContent ? titleEl.textContent.trim() : '';
+    });
+    container.appendChild(btn);
+  }
+
   function ensureTitleCopyButtons() {
     ensureCopyTitleStyle();
-    // Find title wrappers and handle both view and edit modes
+    // Find title wrappers and handle both view and edit modes (sidebar)
     const wrappers = document.querySelectorAll(TITLE_WRAPPER_SELECTOR);
     for (const parent of wrappers) {
       processTitleWrapper(parent);
       ensureObserverForWrapper(parent);
+    }
+    
+    // Find popup/popover title containers and add copy buttons
+    const popupTitles = document.querySelectorAll(POPUP_TITLE_SELECTOR);
+    for (const container of popupTitles) {
+      processPopupTitle(container);
+      ensureObserverForWrapper(container);
     }
   }
 
